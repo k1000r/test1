@@ -366,7 +366,15 @@ async function startScanner() {
       }
     });
   } catch (err) {
-    status.textContent = `Erreur caméra: ${err.message}`;
+    let msg = `Erreur caméra: ${err.message}`;
+    if (err.name === 'NotAllowedError') {
+      msg = '⛔ Accès à la caméra refusé. Autorisez la caméra dans Réglages → Safari → Caméra.';
+    } else if (err.name === 'NotFoundError') {
+      msg = '📷 Aucune caméra détectée sur cet appareil.';
+    } else if (err.name === 'NotSupportedError' || err.name === 'SecurityError') {
+      msg = '🔒 La caméra nécessite HTTPS. Accédez à l\'app via une URL sécurisée (https://).';
+    }
+    status.innerHTML = `<span style="color:var(--danger)">${msg}</span>`;
   }
 }
 

@@ -2,14 +2,12 @@
 
 let scannerActive = false;
 let codeReader = null;
-let videoEl = null;
-let streamRef = null;
 
 async function initScanner(videoElement, onDetect) {
-  videoEl = videoElement;
   if (!window.ZXing) {
     throw new Error('ZXing library non chargée');
   }
+
   const hints = new Map();
   const formats = [
     ZXing.BarcodeFormat.EAN_13,
@@ -20,25 +18,51 @@ async function initScanner(videoElement, onDetect) {
   ];
   hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
   codeReader = new ZXing.BrowserMultiFormatReader(hints);
-  const devices = await ZXing.BrowserCodeReader.listVideoInputDevices();
-  // Prefer back camera
-  const device = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[devices.length - 1] || devices[0];
-  const deviceId = device?.deviceId;
 
   scannerActive = true;
-  codeReader.decodeFromVideoDevice(deviceId, videoEl, (result, err) => {
-    if (!scannerActive) return;
-    if (result) {
-      stopScanner();
-      onDetect(result.getText());
+
+  // Use environment-facing camera constraints — works reliably on iOS Safari
+  const constraints = {
+    video: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
     }
-  });
+  };
+
+  try {
+    await codeReader.decodeFromConstraints(constraints, videoElement, (result, err) => {
+      if (!scannerActive) return;
+      if (result) {
+        stopScanner();
+        onDetect(result.getText());
+      }
+      // ZXing continuously fires NotFoundException — ignore silently
+    });
+  } catch (err) {
+    // If facingMode fails (e.g. desktop with single camera), retry without constraint
+    if (err.name === 'OverconstrainedError' || err.name === 'NotFoundError') {
+      await codeReader.decodeFromConstraints(
+        { video: true },
+        videoElement,
+        (result, err) => {
+          if (!scannerActive) return;
+          if (result) {
+            stopScanner();
+            onDetect(result.getText());
+          }
+        }
+      );
+    } else {
+      throw err;
+    }
+  }
 }
 
 function stopScanner() {
   scannerActive = false;
   if (codeReader) {
-    codeReader.reset();
+    try { codeReader.reset(); } catch (_) {}
     codeReader = null;
   }
 }
