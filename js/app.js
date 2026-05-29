@@ -546,8 +546,53 @@ async function addWishlistManual() {
   renderWishlist(wishlist);
 }
 
+// ── SAQ Database Refresh ──────────────────────────────────────────────────────
+async function refreshSAQDatabase() {
+  const btn = $('#btn-refresh-saq');
+  const progress = $('#saq-db-progress');
+  const bar = $('#saq-progress-bar');
+  const text = $('#saq-progress-text');
+
+  btn.disabled = true;
+  btn.textContent = 'Téléchargement…';
+  progress.style.display = 'block';
+
+  try {
+    await SAQDB.fetchAndStoreSAQData((msg, pct) => {
+      if (bar) bar.style.width = pct + '%';
+      if (text) text.textContent = msg;
+    });
+    showToast('✅ Catalogue SAQ mis à jour!');
+    await renderSAQDBStatus();
+  } catch (err) {
+    showToast('❌ ' + err.message, 4000);
+    if (text) text.textContent = '❌ ' + err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↺ Télécharger / Rafraîchir le catalogue SAQ';
+    setTimeout(() => { if (progress) progress.style.display = 'none'; }, 3000);
+  }
+}
+
+async function renderSAQDBStatus() {
+  const el = $('#saq-db-info');
+  if (!el) return;
+  const meta = await SAQDB.getSAQMeta();
+  const count = await SAQDB.getSAQProductCount();
+  if (!meta || count === 0) {
+    el.innerHTML = `<span style="color:var(--text-muted)">Catalogue non téléchargé — appuyez sur le bouton ci-dessous pour activer la recherche SAQ.</span>`;
+  } else {
+    const date = new Date(meta.updatedAt).toLocaleDateString('fr-CA', { year: 'numeric', month: 'long', day: 'numeric' });
+    el.innerHTML = `
+      <span style="color:var(--success)">✅ ${count.toLocaleString()} produits chargés</span><br>
+      <span style="color:var(--text-muted);font-size:12px">Dernière mise à jour : ${date}</span><br>
+      <span style="color:var(--text-muted);font-size:12px">Dont ${meta.withBarcodes || '?'} avec code-barres</span>`;
+  }
+}
+
 // ── Profile / Insights Page ───────────────────────────────────────────────────
 async function renderProfile() {
+  await renderSAQDBStatus();
   const wines = await DB.getAllWines();
   const insights = Pairing.generateCellarInsights(wines);
   const el = $('#insights-list');
@@ -616,6 +661,57 @@ function initForms() {
   // Add wine FAB
   $('#btn-add-wine').addEventListener('click', () => openAddWine());
 
+  // SAQ autocomplete on wine name input
+  let autocompleteTimer = null;
+  const nameInput = $('#wine-name-input');
+  const acList = $('#saq-autocomplete');
+  nameInput.addEventListener('input', () => {
+    clearTimeout(autocompleteTimer);
+    const q = nameInput.value.trim();
+    if (q.length < 2) { acList.style.display = 'none'; return; }
+    autocompleteTimer = setTimeout(async () => {
+      const results = await SAQDB.searchSAQByName(q);
+      if (!results.length) { acList.style.display = 'none'; return; }
+      acList.innerHTML = results.map(p => `
+        <div class="ac-item" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);font-size:14px"
+             data-name="${escHtml(p.name)}"
+             data-region="${escHtml(p.region||p.country||'')}"
+             data-grape="${escHtml(p.grape||'')}"
+             data-appellation="${escHtml(p.appellation||'')}"
+             data-price="${escHtml(p.price||'')}"
+             data-type="${escHtml(p.type||'')}"
+             data-vintage="${escHtml(p.vintage||'')}">
+          <div style="font-weight:600">${escHtml(p.name)}</div>
+          <div style="font-size:12px;color:var(--text-muted)">${[p.region||p.country, p.grape, p.price ? p.price+'$' : ''].filter(Boolean).join(' · ')}</div>
+        </div>`).join('');
+      acList.style.display = 'block';
+      acList.querySelectorAll('.ac-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const form = $('#wine-form');
+          form.querySelector('[name=name]').value = item.dataset.name;
+          if (item.dataset.region) form.querySelector('[name=region]').value = item.dataset.region;
+          if (item.dataset.grape) form.querySelector('[name=grape]').value = item.dataset.grape;
+          if (item.dataset.appellation) form.querySelector('[name=appellation]').value = item.dataset.appellation;
+          if (item.dataset.price) form.querySelector('[name=price]').value = item.dataset.price;
+          if (item.dataset.vintage) form.querySelector('[name=vintage]').value = item.dataset.vintage;
+          if (item.dataset.type) {
+            const sel = form.querySelector('[name=type]');
+            const t = item.dataset.type.toLowerCase();
+            if (t.includes('blanc')) sel.value = 'Blanc';
+            else if (t.includes('ros')) sel.value = 'Rosé';
+            else if (t.includes('mouss') || t.includes('champagne') || t.includes('crémant')) sel.value = 'Mousseux / Champagne';
+            else if (t.includes('rouge')) sel.value = 'Rouge';
+          }
+          acList.style.display = 'none';
+          showToast('Informations SAQ importées ✓');
+        });
+        item.addEventListener('mouseover', () => item.style.background = 'var(--surface)');
+        item.addEventListener('mouseout', () => item.style.background = '');
+      });
+    }, 300);
+  });
+  nameInput.addEventListener('blur', () => setTimeout(() => { acList.style.display = 'none'; }, 200));
+
   // Note form
   $('#note-form').addEventListener('submit', saveNote);
   $('#btn-cancel-note').addEventListener('click', () => closeSheet('sheet-note'));
@@ -672,3 +768,4 @@ window.addToWishlist = addToWishlist;
 window.removeWishlistItem = removeWishlistItem;
 window.stopScannerAndNav = stopScannerAndNav;
 window.openAddWine = openAddWine;
+window.refreshSAQDatabase = refreshSAQDatabase;

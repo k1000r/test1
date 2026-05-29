@@ -61,16 +61,37 @@ function stopScanner() {
   }
 }
 
-// ── Lookup cascade: Open Food Facts → UPC Item DB → fallback ─────────────────
+// ── Lookup cascade: SAQ DB → Open Food Facts → UPC Item DB → fallback ─────────
 
 async function lookupBarcode(barcode) {
-  // 1. Try Open Food Facts
+  // 1. Try local SAQ database first (best coverage for Quebec wines)
+  try {
+    const count = await SAQDB.getSAQProductCount();
+    if (count > 0) {
+      const result = await SAQDB.lookupSAQByBarcode(barcode);
+      if (result && result.name) {
+        return {
+          name: result.name,
+          vintage: result.vintage || extractVintage(result.name),
+          region: result.region || result.country || '',
+          grape: result.grape || '',
+          appellation: result.appellation || '',
+          price: result.price || '',
+          type: result.type || '',
+          barcode,
+          source: 'SAQ'
+        };
+      }
+    }
+  } catch (_) {}
+
+  // 2. Try Open Food Facts
   try {
     const result = await lookupOpenFoodFacts(barcode);
     if (result) return result;
   } catch (_) {}
 
-  // 2. Try UPC Item DB (free tier, good coverage for North American products)
+  // 3. Try UPC Item DB (free tier, good coverage for North American products)
   try {
     const result = await lookupUPCItemDB(barcode);
     if (result) return result;
