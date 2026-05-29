@@ -349,20 +349,16 @@ async function startScanner() {
 
   try {
     await Scanner.initScanner(video, async (barcode) => {
-      status.textContent = `Code détecté: ${barcode} — Recherche…`;
+      status.innerHTML = `🔍 Code détecté: <strong>${barcode}</strong><br><small style="color:var(--text-muted)">Recherche dans les bases de données…</small>`;
       try {
         const info = await Scanner.lookupBarcode(barcode);
-        status.textContent = `Trouvé: ${info.name || barcode}`;
-        setTimeout(() => {
-          openAddWine(info);
-          showPage('add');
-        }, 800);
+        const src = info.source ? ` <small style="color:var(--text-muted)">(via ${info.source})</small>` : '';
+        status.innerHTML = `✅ Trouvé : <strong>${info.name}</strong>${src}`;
+        setTimeout(() => { openAddWine(info); showPage('add'); }, 900);
       } catch (err) {
-        status.textContent = `Code: ${barcode} (non trouvé en base) — Entrée manuelle`;
-        setTimeout(() => {
-          openAddWine({ barcode });
-          showPage('add');
-        }, 1200);
+        status.innerHTML = `⚠️ Code <strong>${barcode}</strong> non trouvé dans les bases de données.<br>
+          <small style="color:var(--text-muted)">Vous pouvez saisir les informations manuellement.</small>`;
+        setTimeout(() => { openAddWine({ barcode }); showPage('add'); }, 1800);
       }
     });
   } catch (err) {

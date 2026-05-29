@@ -1,4 +1,4 @@
-// Barcode scanner using ZXing library + Open Food Facts lookup
+// Barcode scanner using ZXing library + multi-source wine lookup
 
 let scannerActive = false;
 let codeReader = null;
@@ -21,7 +21,6 @@ async function initScanner(videoElement, onDetect) {
 
   scannerActive = true;
 
-  // Use environment-facing camera constraints — works reliably on iOS Safari
   const constraints = {
     video: {
       facingMode: { ideal: 'environment' },
@@ -37,20 +36,15 @@ async function initScanner(videoElement, onDetect) {
         stopScanner();
         onDetect(result.getText());
       }
-      // ZXing continuously fires NotFoundException — ignore silently
     });
   } catch (err) {
-    // If facingMode fails (e.g. desktop with single camera), retry without constraint
     if (err.name === 'OverconstrainedError' || err.name === 'NotFoundError') {
       await codeReader.decodeFromConstraints(
         { video: true },
         videoElement,
-        (result, err) => {
+        (result) => {
           if (!scannerActive) return;
-          if (result) {
-            stopScanner();
-            onDetect(result.getText());
-          }
+          if (result) { stopScanner(); onDetect(result.getText()); }
         }
       );
     } else {
@@ -67,27 +61,103 @@ function stopScanner() {
   }
 }
 
+// ── Lookup cascade: Open Food Facts → UPC Item DB → fallback ─────────────────
+
 async function lookupBarcode(barcode) {
+  // 1. Try Open Food Facts
+  try {
+    const result = await lookupOpenFoodFacts(barcode);
+    if (result) return result;
+  } catch (_) {}
+
+  // 2. Try UPC Item DB (free tier, good coverage for North American products)
+  try {
+    const result = await lookupUPCItemDB(barcode);
+    if (result) return result;
+  } catch (_) {}
+
+  // Nothing found — return just the barcode so user can fill manually
+  throw new Error('Vin non trouvé dans les bases de données');
+}
+
+async function lookupOpenFoodFacts(barcode) {
   const url = `https://world.openfoodfacts.org/api/v0/product/${barcode}.json`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) throw new Error('Produit introuvable');
+  const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+  if (!res.ok) return null;
   const data = await res.json();
-  if (data.status !== 1 || !data.product) throw new Error('Produit non trouvé dans la base de données');
+  if (data.status !== 1 || !data.product) return null;
 
   const p = data.product;
+  const name = p.product_name_fr || p.product_name || '';
+  if (!name) return null;
+
   return {
-    name: p.product_name_fr || p.product_name || '',
-    vintage: extractVintage(p.product_name_fr || p.product_name || ''),
+    name,
+    vintage: extractVintage(name),
     region: p.origins_tags?.[0]?.replace('en:', '') || '',
-    grape: p.ingredients_text || '',
-    appellation: p.labels_tags?.join(', ') || '',
-    barcode
+    grape: '', // OFF rarely has grape info
+    appellation: p.labels_tags?.filter(t => !t.startsWith('en:')).join(', ') || '',
+    barcode,
+    source: 'Open Food Facts'
   };
 }
 
-function extractVintage(name) {
-  const match = name.match(/\b(19|20)\d{2}\b/);
+async function lookupUPCItemDB(barcode) {
+  const url = `https://api.upcitemdb.com/prod/trial/lookup?upc=${barcode}`;
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(6000),
+    headers: { 'Accept': 'application/json' }
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (data.code !== 'OK' || !data.items?.length) return null;
+
+  const item = data.items[0];
+  const name = item.title || '';
+  if (!name) return null;
+
+  // Extract vintage and region from description if available
+  const desc = [item.description, item.brand, ...(item.category ? [item.category] : [])].join(' ');
+
+  return {
+    name,
+    vintage: extractVintage(name + ' ' + desc),
+    region: extractRegion(desc),
+    grape: extractGrape(desc),
+    appellation: item.brand || '',
+    barcode,
+    source: 'UPC Item DB'
+  };
+}
+
+function extractVintage(text) {
+  const match = (text || '').match(/\b(19[5-9]\d|20[0-2]\d)\b/);
   return match ? match[0] : '';
+}
+
+function extractRegion(text) {
+  const regions = [
+    'Bordeaux','Bourgogne','Burgundy','Champagne','Alsace','Rhône','Loire',
+    'Provence','Languedoc','Rioja','Ribera','Toscane','Tuscany','Veneto',
+    'Piémont','Piedmont','Sicile','Sicily','Napa','Sonoma','Mendoza',
+    'Maipo','Colchagua','Barossa','McLaren','Marlborough','Hawke'
+  ];
+  const t = (text || '').toLowerCase();
+  const found = regions.find(r => t.includes(r.toLowerCase()));
+  return found || '';
+}
+
+function extractGrape(text) {
+  const grapes = [
+    'Cabernet Sauvignon','Merlot','Pinot Noir','Syrah','Shiraz','Malbec',
+    'Tempranillo','Sangiovese','Nebbiolo','Grenache','Zinfandel',
+    'Chardonnay','Sauvignon Blanc','Riesling','Pinot Gris','Pinot Grigio',
+    'Gewurztraminer','Viognier','Chenin Blanc','Muscat','Albariño',
+    'Gamay','Mourvèdre','Carignan'
+  ];
+  const t = (text || '').toLowerCase();
+  const found = grapes.find(g => t.includes(g.toLowerCase()));
+  return found || '';
 }
 
 window.Scanner = { initScanner, stopScanner, lookupBarcode };
