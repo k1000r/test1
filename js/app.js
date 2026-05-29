@@ -547,31 +547,53 @@ async function addWishlistManual() {
 }
 
 // ── SAQ Database Refresh ──────────────────────────────────────────────────────
-async function refreshSAQDatabase() {
-  const btn = $('#btn-refresh-saq');
-  const progress = $('#saq-db-progress');
+
+function saqProgressHandler(msg, pct) {
   const bar = $('#saq-progress-bar');
   const text = $('#saq-progress-text');
+  const progress = $('#saq-db-progress');
+  if (progress) progress.style.display = 'block';
+  if (bar) bar.style.width = pct + '%';
+  if (text) text.textContent = msg;
+}
 
-  btn.disabled = true;
-  btn.textContent = 'Téléchargement…';
-  progress.style.display = 'block';
+async function runSAQImport(fetchFn) {
+  const btn = $('#btn-refresh-saq');
+  if (btn) { btn.disabled = true; }
 
   try {
-    await SAQDB.fetchAndStoreSAQData((msg, pct) => {
-      if (bar) bar.style.width = pct + '%';
-      if (text) text.textContent = msg;
-    });
+    await fetchFn(saqProgressHandler);
     showToast('✅ Catalogue SAQ mis à jour!');
     await renderSAQDBStatus();
   } catch (err) {
-    showToast('❌ ' + err.message, 4000);
-    if (text) text.textContent = '❌ ' + err.message;
+    const text = $('#saq-progress-text');
+    if (text) text.innerHTML = `<span style="color:var(--danger)">❌ ${escHtml(err.message)}</span>`;
+    showToast('❌ Échec du chargement', 4000);
   } finally {
-    btn.disabled = false;
-    btn.textContent = '↺ Télécharger / Rafraîchir le catalogue SAQ';
-    setTimeout(() => { if (progress) progress.style.display = 'none'; }, 3000);
+    if (btn) { btn.disabled = false; }
+    setTimeout(() => {
+      const p = $('#saq-db-progress');
+      if (p) p.style.display = 'none';
+    }, 5000);
   }
+}
+
+async function refreshSAQDatabase() {
+  await runSAQImport((onProgress) => SAQDB.fetchAndStoreSAQData(onProgress));
+}
+
+async function refreshSAQFromCustomUrl() {
+  const urlInput = $('#saq-custom-url');
+  const url = urlInput?.value?.trim();
+  if (!url) { showToast('Entrez une URL valide'); return; }
+  await runSAQImport((onProgress) => SAQDB.fetchAndStoreSAQData(onProgress, url));
+}
+
+async function importSAQFile(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  await runSAQImport((onProgress) => SAQDB.importFromFile(file, onProgress));
+  input.value = ''; // reset so same file can be re-imported
 }
 
 async function renderSAQDBStatus() {
@@ -769,3 +791,5 @@ window.removeWishlistItem = removeWishlistItem;
 window.stopScannerAndNav = stopScannerAndNav;
 window.openAddWine = openAddWine;
 window.refreshSAQDatabase = refreshSAQDatabase;
+window.refreshSAQFromCustomUrl = refreshSAQFromCustomUrl;
+window.importSAQFile = importSAQFile;
