@@ -1,0 +1,9 @@
+name = "mon-cellier-vincod"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# La clé VINCOD_API_KEY est un secret — ne pas la mettre ici!
+# Ajoutez-la avec: wrangler secret put VINCOD_API_KEY
+
+[env.production]
+name = "mon-cellier-vincod"
