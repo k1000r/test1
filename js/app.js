@@ -277,14 +277,62 @@ async function saveNote(e) {
 // ── Add / Edit Wine ───────────────────────────────────────────────────────────
 function openAddWine(prefill = {}) {
   App.editingWineId = null;
+  App.pendingTastingNote = null;
   const form = $('#wine-form');
   form.reset();
   $('#wine-form-title').textContent = 'Ajouter un vin';
-  if (prefill.name) form.querySelector('[name=name]').value = prefill.name;
-  if (prefill.vintage) form.querySelector('[name=vintage]').value = prefill.vintage;
-  if (prefill.region) form.querySelector('[name=region]').value = prefill.region;
-  if (prefill.grape) form.querySelector('[name=grape]').value = prefill.grape;
-  if (prefill.barcode) form.querySelector('[name=barcode]').value = prefill.barcode;
+
+  const set = (name, val) => { if (val) { const el = form.querySelector(`[name=${name}]`); if (el) el.value = val; } };
+  set('name',         prefill.name);
+  set('vintage',      prefill.vintage);
+  set('region',       prefill.region || prefill.country);
+  set('grape',        prefill.grape);
+  set('appellation',  prefill.appellation);
+  set('barcode',      prefill.barcode);
+  set('price',        prefill.price);
+  set('location',     prefill.format); // format → location not ideal but useful hint
+
+  // Map Sommelier Virtuel type to our select values
+  if (prefill.type) {
+    const t = prefill.type.toLowerCase();
+    const sel = form.querySelector('[name=type]');
+    if (sel) {
+      if (t.includes('rouge'))    sel.value = 'Rouge';
+      else if (t.includes('blanc')) sel.value = 'Blanc';
+      else if (t.includes('ros'))   sel.value = 'Rosé';
+      else if (t.includes('mouss') || t.includes('crémant') || t.includes('champagne')) sel.value = 'Mousseux / Champagne';
+      else if (t.includes('dessert') || t.includes('porto') || t.includes('liquor')) sel.value = 'Fortifié';
+    }
+  }
+
+  // Store tasting data for optional auto-note after save
+  if (prefill.tastingNose || prefill.tastingPalate || prefill.description) {
+    App.pendingTastingNote = {
+      color:  prefill.tastingColor  || '',
+      nose:   prefill.tastingNose   || '',
+      palate: prefill.tastingPalate || '',
+      text:   prefill.description   || '',
+      score:  prefill.svRating ? Math.round(parseFloat(prefill.svRating) * 10) : null,
+    };
+  }
+
+  // Show source banner if data came from Sommelier Virtuel
+  const banner = $('#sv-prefill-banner');
+  if (banner) {
+    if (prefill.source === 'Sommelier Virtuel') {
+      banner.style.display = 'block';
+      banner.innerHTML = `✅ Données importées depuis <strong>Sommelier Virtuel</strong>
+        ${prefill.qualitePrix ? ` · Rapport Q/P : <em>${escHtml(prefill.qualitePrix)}</em>` : ''}
+        ${prefill.evolution ? ` · ${escHtml(prefill.evolution)}` : ''}
+        ${prefill.saqCode ? ` · Code SAQ : ${escHtml(prefill.saqCode)}` : ''}`;
+    } else if (prefill.source) {
+      banner.style.display = 'block';
+      banner.innerHTML = `✅ Données importées depuis <strong>${escHtml(prefill.source)}</strong>`;
+    } else {
+      banner.style.display = 'none';
+    }
+  }
+
   showPage('add');
 }
 
@@ -326,10 +374,17 @@ async function saveWine(e) {
     await DB.updateWine(data);
     showToast('Vin modifié ✓');
   } else {
-    await DB.addWine(data);
-    showToast('Vin ajouté ✓');
+    const newId = await DB.addWine(data);
+    // Auto-create tasting note if Sommelier Virtuel provided tasting data
+    if (App.pendingTastingNote && (App.pendingTastingNote.nose || App.pendingTastingNote.palate || App.pendingTastingNote.text)) {
+      await DB.addNote({ wineId: newId, ...App.pendingTastingNote, date: new Date().toISOString().slice(0, 10) });
+      showToast('Vin ajouté + note de dégustation créée ✓');
+    } else {
+      showToast('Vin ajouté ✓');
+    }
   }
   App.editingWineId = null;
+  App.pendingTastingNote = null;
   showPage('cellar');
 }
 
@@ -349,24 +404,28 @@ async function startScanner() {
 
   try {
     await Scanner.initScanner(video, async (barcode) => {
-      status.textContent = `Code détecté: ${barcode} — Recherche…`;
+      status.innerHTML = `🔍 Code détecté: <strong>${barcode}</strong><br><small style="color:var(--text-muted)">Recherche dans les bases de données…</small>`;
       try {
         const info = await Scanner.lookupBarcode(barcode);
-        status.textContent = `Trouvé: ${info.name || barcode}`;
-        setTimeout(() => {
-          openAddWine(info);
-          showPage('add');
-        }, 800);
+        const src = info.source ? ` <small style="color:var(--text-muted)">(via ${info.source})</small>` : '';
+        status.innerHTML = `✅ Trouvé : <strong>${info.name}</strong>${src}`;
+        setTimeout(() => { openAddWine(info); showPage('add'); }, 900);
       } catch (err) {
-        status.textContent = `Code: ${barcode} (non trouvé en base) — Entrée manuelle`;
-        setTimeout(() => {
-          openAddWine({ barcode });
-          showPage('add');
-        }, 1200);
+        status.innerHTML = `⚠️ Code <strong>${barcode}</strong> non trouvé dans les bases de données.<br>
+          <small style="color:var(--text-muted)">Vous pouvez saisir les informations manuellement.</small>`;
+        setTimeout(() => { openAddWine({ barcode }); showPage('add'); }, 1800);
       }
     });
   } catch (err) {
-    status.textContent = `Erreur caméra: ${err.message}`;
+    let msg = `Erreur caméra: ${err.message}`;
+    if (err.name === 'NotAllowedError') {
+      msg = '⛔ Accès à la caméra refusé. Autorisez la caméra dans Réglages → Safari → Caméra.';
+    } else if (err.name === 'NotFoundError') {
+      msg = '📷 Aucune caméra détectée sur cet appareil.';
+    } else if (err.name === 'NotSupportedError' || err.name === 'SecurityError') {
+      msg = '🔒 La caméra nécessite HTTPS. Accédez à l\'app via une URL sécurisée (https://).';
+    }
+    status.innerHTML = `<span style="color:var(--danger)">${msg}</span>`;
   }
 }
 
@@ -542,8 +601,75 @@ async function addWishlistManual() {
   renderWishlist(wishlist);
 }
 
+// ── SAQ Database Refresh ──────────────────────────────────────────────────────
+
+function saqProgressHandler(msg, pct) {
+  const bar = $('#saq-progress-bar');
+  const text = $('#saq-progress-text');
+  const progress = $('#saq-db-progress');
+  if (progress) progress.style.display = 'block';
+  if (bar) bar.style.width = pct + '%';
+  if (text) text.textContent = msg;
+}
+
+async function runSAQImport(fetchFn) {
+  const btn = $('#btn-refresh-saq');
+  if (btn) { btn.disabled = true; }
+
+  try {
+    await fetchFn(saqProgressHandler);
+    showToast('✅ Catalogue SAQ mis à jour!');
+    await renderSAQDBStatus();
+  } catch (err) {
+    const text = $('#saq-progress-text');
+    if (text) text.innerHTML = `<span style="color:var(--danger)">❌ ${escHtml(err.message)}</span>`;
+    showToast('❌ Échec du chargement', 4000);
+  } finally {
+    if (btn) { btn.disabled = false; }
+    setTimeout(() => {
+      const p = $('#saq-db-progress');
+      if (p) p.style.display = 'none';
+    }, 5000);
+  }
+}
+
+async function refreshSAQDatabase() {
+  await runSAQImport((onProgress) => SAQDB.fetchAndStoreSAQData(onProgress));
+}
+
+async function refreshSAQFromCustomUrl() {
+  const urlInput = $('#saq-custom-url');
+  const url = urlInput?.value?.trim();
+  if (!url) { showToast('Entrez une URL valide'); return; }
+  await runSAQImport((onProgress) => SAQDB.fetchAndStoreSAQData(onProgress, url));
+}
+
+async function importSAQFile(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  await runSAQImport((onProgress) => SAQDB.importFromFile(file, onProgress));
+  input.value = ''; // reset so same file can be re-imported
+}
+
+async function renderSAQDBStatus() {
+  const el = $('#saq-db-info');
+  if (!el) return;
+  const meta = await SAQDB.getSAQMeta();
+  const count = await SAQDB.getSAQProductCount();
+  if (!meta || count === 0) {
+    el.innerHTML = `<span style="color:var(--text-muted)">Catalogue non téléchargé — appuyez sur le bouton ci-dessous pour activer la recherche SAQ.</span>`;
+  } else {
+    const date = new Date(meta.updatedAt).toLocaleDateString('fr-CA', { year: 'numeric', month: 'long', day: 'numeric' });
+    el.innerHTML = `
+      <span style="color:var(--success)">✅ ${count.toLocaleString()} produits chargés</span><br>
+      <span style="color:var(--text-muted);font-size:12px">Dernière mise à jour : ${date}</span><br>
+      <span style="color:var(--text-muted);font-size:12px">Dont ${meta.withBarcodes || '?'} avec code-barres</span>`;
+  }
+}
+
 // ── Profile / Insights Page ───────────────────────────────────────────────────
 async function renderProfile() {
+  await renderSAQDBStatus();
   const wines = await DB.getAllWines();
   const insights = Pairing.generateCellarInsights(wines);
   const el = $('#insights-list');
@@ -612,6 +738,57 @@ function initForms() {
   // Add wine FAB
   $('#btn-add-wine').addEventListener('click', () => openAddWine());
 
+  // SAQ autocomplete on wine name input
+  let autocompleteTimer = null;
+  const nameInput = $('#wine-name-input');
+  const acList = $('#saq-autocomplete');
+  nameInput.addEventListener('input', () => {
+    clearTimeout(autocompleteTimer);
+    const q = nameInput.value.trim();
+    if (q.length < 2) { acList.style.display = 'none'; return; }
+    autocompleteTimer = setTimeout(async () => {
+      const results = await SAQDB.searchSAQByName(q);
+      if (!results.length) { acList.style.display = 'none'; return; }
+      acList.innerHTML = results.map(p => `
+        <div class="ac-item" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);font-size:14px"
+             data-name="${escHtml(p.name)}"
+             data-region="${escHtml(p.region||p.country||'')}"
+             data-grape="${escHtml(p.grape||'')}"
+             data-appellation="${escHtml(p.appellation||'')}"
+             data-price="${escHtml(p.price||'')}"
+             data-type="${escHtml(p.type||'')}"
+             data-vintage="${escHtml(p.vintage||'')}">
+          <div style="font-weight:600">${escHtml(p.name)}</div>
+          <div style="font-size:12px;color:var(--text-muted)">${[p.region||p.country, p.grape, p.price ? p.price+'$' : ''].filter(Boolean).join(' · ')}</div>
+        </div>`).join('');
+      acList.style.display = 'block';
+      acList.querySelectorAll('.ac-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const form = $('#wine-form');
+          form.querySelector('[name=name]').value = item.dataset.name;
+          if (item.dataset.region) form.querySelector('[name=region]').value = item.dataset.region;
+          if (item.dataset.grape) form.querySelector('[name=grape]').value = item.dataset.grape;
+          if (item.dataset.appellation) form.querySelector('[name=appellation]').value = item.dataset.appellation;
+          if (item.dataset.price) form.querySelector('[name=price]').value = item.dataset.price;
+          if (item.dataset.vintage) form.querySelector('[name=vintage]').value = item.dataset.vintage;
+          if (item.dataset.type) {
+            const sel = form.querySelector('[name=type]');
+            const t = item.dataset.type.toLowerCase();
+            if (t.includes('blanc')) sel.value = 'Blanc';
+            else if (t.includes('ros')) sel.value = 'Rosé';
+            else if (t.includes('mouss') || t.includes('champagne') || t.includes('crémant')) sel.value = 'Mousseux / Champagne';
+            else if (t.includes('rouge')) sel.value = 'Rouge';
+          }
+          acList.style.display = 'none';
+          showToast('Informations SAQ importées ✓');
+        });
+        item.addEventListener('mouseover', () => item.style.background = 'var(--surface)');
+        item.addEventListener('mouseout', () => item.style.background = '');
+      });
+    }, 300);
+  });
+  nameInput.addEventListener('blur', () => setTimeout(() => { acList.style.display = 'none'; }, 200));
+
   // Note form
   $('#note-form').addEventListener('submit', saveNote);
   $('#btn-cancel-note').addEventListener('click', () => closeSheet('sheet-note'));
@@ -668,3 +845,6 @@ window.addToWishlist = addToWishlist;
 window.removeWishlistItem = removeWishlistItem;
 window.stopScannerAndNav = stopScannerAndNav;
 window.openAddWine = openAddWine;
+window.refreshSAQDatabase = refreshSAQDatabase;
+window.refreshSAQFromCustomUrl = refreshSAQFromCustomUrl;
+window.importSAQFile = importSAQFile;

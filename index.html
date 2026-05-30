@@ -49,10 +49,12 @@
   <div class="page-header">
     <div class="page-title" id="wine-form-title">Ajouter un vin</div>
   </div>
+  <div id="sv-prefill-banner" style="display:none;background:var(--wine-dark);color:var(--gold-light);font-size:13px;padding:10px 14px;border-radius:10px;margin-bottom:14px;line-height:1.5"></div>
   <form id="wine-form" autocomplete="off">
-    <div class="form-group">
+    <div class="form-group" style="position:relative">
       <label class="form-label">Nom du vin *</label>
-      <input name="name" type="text" placeholder="Ex: Château Margaux" required>
+      <input name="name" id="wine-name-input" type="text" placeholder="Ex: Château Margaux" required autocomplete="off">
+      <div id="saq-autocomplete" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:50;background:var(--surface2);border:1px solid var(--border);border-radius:0 0 10px 10px;max-height:220px;overflow-y:auto"></div>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -183,6 +185,51 @@
   <div id="profile-stats"></div>
   <div class="section-title">📊 Analyse de votre cellier</div>
   <div id="insights-list"></div>
+  <div class="section-title">🗄️ Base de données SAQ</div>
+  <div class="card" id="saq-db-card">
+    <div class="card-title">Catalogue SAQ local</div>
+    <div class="card-sub mt-8" id="saq-db-info">Chargement…</div>
+    <hr class="divider">
+
+    <!-- Progress bar -->
+    <div id="saq-db-progress" style="display:none;margin-bottom:12px">
+      <div style="background:var(--surface2);border-radius:20px;height:8px;overflow:hidden">
+        <div id="saq-progress-bar" style="background:var(--wine);height:100%;width:0%;transition:width .3s"></div>
+      </div>
+      <div id="saq-progress-text" style="font-size:12px;color:var(--text-muted);margin-top:6px;text-align:center"></div>
+    </div>
+
+    <!-- Option 1: Auto download -->
+    <div style="margin-bottom:10px">
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:6px">OPTION 1 — Téléchargement automatique</div>
+      <button class="btn btn-primary btn-block" id="btn-refresh-saq" onclick="refreshSAQDatabase()">
+        ↺ Télécharger depuis GitHub
+      </button>
+    </div>
+
+    <!-- Option 2: Custom URL -->
+    <div style="margin-bottom:10px">
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:6px">OPTION 2 — URL personnalisée</div>
+      <div style="display:flex;gap:8px">
+        <input type="url" id="saq-custom-url" placeholder="https://... (lien direct vers un fichier .csv)" style="flex:1;font-size:13px">
+        <button class="btn btn-secondary btn-sm" onclick="refreshSAQFromCustomUrl()">↓</button>
+      </div>
+    </div>
+
+    <!-- Option 3: Local file -->
+    <div>
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:6px">OPTION 3 — Importer un fichier CSV local</div>
+      <label class="btn btn-secondary btn-block" style="cursor:pointer;text-align:center">
+        📂 Choisir un fichier CSV
+        <input type="file" id="saq-file-input" accept=".csv,.json" style="display:none" onchange="importSAQFile(this)">
+      </label>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:6px;line-height:1.5">
+        Téléchargez un fichier CSV avec des colonnes <em>name/nom</em>, <em>barcode</em>, <em>region</em>, <em>grape/cepage</em>, <em>price/prix</em>.
+        Exemple : <a href="https://github.com/nicbou/saq-data" target="_blank">github.com/nicbou/saq-data</a>
+      </div>
+    </div>
+  </div>
+
   <div class="section-title">ℹ️ À propos</div>
   <div class="card">
     <div class="card-title">Mon Cellier v1.0</div>
@@ -257,6 +304,7 @@
 <script src="https://cdn.jsdelivr.net/npm/idb@7/build/umd.js"></script>
 <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>
 <script src="js/db.js"></script>
+<script src="js/saq-db.js"></script>
 <script src="js/scanner.js"></script>
 <script src="js/pairing.js"></script>
 <script src="js/saq.js"></script>

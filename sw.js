@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cellier-v1';
+const CACHE_NAME = 'cellier-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -8,6 +8,7 @@ const STATIC_ASSETS = [
   '/js/scanner.js',
   '/js/pairing.js',
   '/js/saq.js',
+  '/js/saq-db.js',
   '/manifest.json',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
