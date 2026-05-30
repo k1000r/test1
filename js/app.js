@@ -546,49 +546,6 @@ async function addWishlistManual() {
   renderWishlist(wishlist);
 }
 
-// ── Vincod Worker Config ──────────────────────────────────────────────────────
-
-async function renderVincodStatus() {
-  const url = await DB.getSetting('vincodWorkerUrl');
-  const el = $('#vincod-status');
-  const input = $('#vincod-worker-url');
-  if (!el) return;
-  if (url) {
-    el.innerHTML = `<span style="color:var(--success)">✅ Configuré : <span style="font-size:12px">${escHtml(url)}</span></span>`;
-    if (input) input.value = url;
-  } else {
-    el.innerHTML = `<span style="color:var(--text-muted)">Non configuré — le scanner utilisera Open Food Facts et la BD SAQ locale.</span>`;
-  }
-}
-
-async function saveVincodWorkerUrl() {
-  const input = $('#vincod-worker-url');
-  const url = (input?.value || '').trim().replace(/\/$/, '');
-  if (!url) { showToast('Entrez une URL valide'); return; }
-  await DB.setSetting('vincodWorkerUrl', url);
-  showToast('URL Vincod enregistrée ✓');
-  await renderVincodStatus();
-}
-
-async function testVincodWorker() {
-  const input = $('#vincod-worker-url');
-  const url = (input?.value || '').trim().replace(/\/$/, '');
-  const result = $('#vincod-test-result');
-  if (!url) { showToast('Entrez une URL d\'abord'); return; }
-  if (result) result.innerHTML = '<span style="color:var(--text-muted)">Test en cours…</span>';
-  try {
-    const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(8000) });
-    const data = await res.json();
-    if (res.ok && data.status === 'ok') {
-      if (result) result.innerHTML = `<span style="color:var(--success)">✅ Worker opérationnel!</span>`;
-    } else {
-      if (result) result.innerHTML = `<span style="color:var(--danger)">⚠️ Réponse inattendue : ${escHtml(JSON.stringify(data))}</span>`;
-    }
-  } catch (err) {
-    if (result) result.innerHTML = `<span style="color:var(--danger)">❌ Erreur : ${escHtml(err.message)}</span>`;
-  }
-}
-
 // ── SAQ Database Refresh ──────────────────────────────────────────────────────
 
 function saqProgressHandler(msg, pct) {
@@ -657,7 +614,6 @@ async function renderSAQDBStatus() {
 
 // ── Profile / Insights Page ───────────────────────────────────────────────────
 async function renderProfile() {
-  await renderVincodStatus();
   await renderSAQDBStatus();
   const wines = await DB.getAllWines();
   const insights = Pairing.generateCellarInsights(wines);
@@ -837,5 +793,3 @@ window.openAddWine = openAddWine;
 window.refreshSAQDatabase = refreshSAQDatabase;
 window.refreshSAQFromCustomUrl = refreshSAQFromCustomUrl;
 window.importSAQFile = importSAQFile;
-window.saveVincodWorkerUrl = saveVincodWorkerUrl;
-window.testVincodWorker = testVincodWorker;

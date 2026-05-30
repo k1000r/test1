@@ -184,27 +184,6 @@
   <div id="profile-stats"></div>
   <div class="section-title">📊 Analyse de votre cellier</div>
   <div id="insights-list"></div>
-  <div class="section-title">🔌 Proxy Vincod (optionnel)</div>
-  <div class="card" style="margin-bottom:4px">
-    <div class="card-title">API Vincod — base de données vins mondiale</div>
-    <div class="card-sub mt-8" id="vincod-status">Non configuré</div>
-    <hr class="divider">
-    <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;line-height:1.5">
-      Vincod offre une base spécialisée en vins (EAN, millésime, cépage, appellation).
-      Requiert un compte Vincod gratuit + un proxy Cloudflare Worker.
-      Instructions dans <code style="background:var(--surface2);padding:2px 5px;border-radius:4px">cloudflare-worker/README.md</code>
-    </div>
-    <div class="form-group">
-      <label class="form-label">URL du Worker Cloudflare</label>
-      <input type="url" id="vincod-worker-url" placeholder="https://mon-cellier-vincod.xxx.workers.dev" style="font-size:13px">
-    </div>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-primary btn-sm" style="flex:1" onclick="saveVincodWorkerUrl()">💾 Enregistrer</button>
-      <button class="btn btn-secondary btn-sm" onclick="testVincodWorker()">🧪 Tester</button>
-    </div>
-    <div id="vincod-test-result" style="font-size:13px;margin-top:10px"></div>
-  </div>
-
   <div class="section-title">🗄️ Base de données SAQ</div>
   <div class="card" id="saq-db-card">
     <div class="card-title">Catalogue SAQ local</div>

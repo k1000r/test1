@@ -61,47 +61,10 @@ function stopScanner() {
   }
 }
 
-// ── Vincod lookup via Cloudflare Worker proxy ─────────────────────────────────
-
-async function lookupVincod(barcode) {
-  const workerUrl = await DB.getSetting('vincodWorkerUrl');
-  if (!workerUrl) return null;
-
-  const url = `${workerUrl.replace(/\/$/, '')}/ean/${barcode}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) return null;
-  const data = await res.json();
-
-  // Vincod returns an array of wines
-  const wines = data.wines || data.results || (Array.isArray(data) ? data : null);
-  if (!wines || wines.length === 0) return null;
-
-  const w = wines[0];
-  return {
-    name: w.name || w.nom || w.label || '',
-    vintage: w.vintage || w.millesime || w.year || extractVintage(w.name || ''),
-    region: w.region || w.appellation_region || '',
-    appellation: w.appellation || w.appellation_name || '',
-    grape: w.grapes || w.cepages || w.variety || '',
-    country: w.country || w.pays || '',
-    producer: w.producer || w.producteur || w.winery || '',
-    alcohol: w.alcohol || w.alcool || '',
-    price: w.price || '',
-    barcode,
-    source: 'Vincod'
-  };
-}
-
-// ── Lookup cascade: Vincod → SAQ DB → Open Food Facts → UPC Item DB ───────────
+// ── Lookup cascade: SAQ DB → Open Food Facts → UPC Item DB → fallback ─────────
 
 async function lookupBarcode(barcode) {
-  // 1. Vincod (meilleure couverture vins mondiale)
-  try {
-    const result = await lookupVincod(barcode);
-    if (result && result.name) return result;
-  } catch (_) {}
-
-  // 2. Base SAQ locale
+  // 1. Try local SAQ database first (best coverage for Quebec wines)
   try {
     const count = await SAQDB.getSAQProductCount();
     if (count > 0) {
@@ -122,18 +85,19 @@ async function lookupBarcode(barcode) {
     }
   } catch (_) {}
 
-  // 3. Open Food Facts
+  // 2. Try Open Food Facts
   try {
     const result = await lookupOpenFoodFacts(barcode);
     if (result) return result;
   } catch (_) {}
 
-  // 4. UPC Item DB
+  // 3. Try UPC Item DB (free tier, good coverage for North American products)
   try {
     const result = await lookupUPCItemDB(barcode);
     if (result) return result;
   } catch (_) {}
 
+  // Nothing found — return just the barcode so user can fill manually
   throw new Error('Vin non trouvé dans les bases de données');
 }
 
