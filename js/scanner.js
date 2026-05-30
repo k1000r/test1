@@ -132,50 +132,72 @@ function parseSearchResults(html, barcode) {
   return { name, vintage, price, country, region, appellation, rating, detailUrl };
 }
 
-// ── Parse detail page — extracts ALL jreviews custom fields ──────────────────
+// ── Parse detail page — exact jreviews CSS class selectors ───────────────────
+// Fields confirmed from real page HTML analysis
 
 function parseDetailPage(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
-  // Generic extractor: read ALL .jrFieldRow label→value pairs
-  const fields = {};
-  doc.querySelectorAll('.jrFieldRow').forEach(row => {
-    const label = row.querySelector('.jrFieldLabel')?.textContent?.trim().toLowerCase() || '';
-    const value = row.querySelector('.jrFieldValue')?.textContent?.trim() || '';
-    if (label && value) fields[label] = value;
-  });
+  // Helper: get text from a known jreviews field class
+  const f = cls => doc.querySelector(`.${cls} .jrFieldValue`)?.textContent?.trim() || '';
 
-  // Map French labels to our schema
-  const get = (...keys) => {
-    for (const k of keys) {
-      if (fields[k]) return fields[k];
-    }
-    return '';
-  };
+  // Core wine fields (exact class names from HTML)
+  const nameFull    = f('jrNomdeproduit'); // "Argiano Rosso-di-Montalcino 2015"
+  const priceRaw    = f('jrPrix');          // "25,60" (French comma)
+  const type        = f('jrCategorie');     // "Rouge"
+  const saqCode     = f('jrCodedeproduit'); // "10252869"
+  const country     = f('jrPaysdorigine'); // "Italie"
+  const region      = f('jrRegion');        // "Toscane"
+  const format      = f('jrFormat');        // "750 ml"
+  const producer    = f('jrProducteur');    // "Argiano SRL"
+  const grape       = f('jrCepage');        // "Sangiovese 100%"
+  const appellation = f('jrAppellation');   // "Rosso di Montalcino"
+  const alcohol     = f('jrPourcentage');   // "14 %"
+  const evolution   = f('jrEvolution');     // "Prêt à boire, mais peut encore attendre"
+  const qp          = f('jrQualiteprix');   // "Honnête"
 
-  const vintage     = get('millésime', 'millesime', 'année', 'annee', 'vintage');
-  const grape       = get('cépage', 'cepage', 'cépages', 'cepages', 'variété', 'variete');
-  const type        = get('type', 'couleur', 'catégorie', 'categorie', 'style');
-  const producer    = get('producteur', 'producer', 'domaine', 'château', 'chateau', 'maison', 'winery');
-  const country     = get('origine', 'pays', 'country');
-  const region      = get('région', 'region');
-  const appellation = get('appellation', 'désignation', 'designation');
-  const alcohol     = get('alcool', 'alcohol', 'degré', 'degre', 'abv');
-  const format      = get('format', 'volume', 'contenant', 'taille');
-  const description = doc.querySelector('.jrListingDescription, .jrDescription, .entry-content p')?.textContent?.trim() || '';
+  // Vintage: extract from product name (most reliable) — "...2015" at end
+  const vintageMatch = nameFull.match(/\b(19[5-9]\d|20[0-2]\d)\b/);
+  const vintage = vintageMatch ? vintageMatch[0] : '';
 
-  // Clean up result — only return non-empty fields
+  // Clean name: remove vintage if it's at end of name
+  const name = nameFull
+    ? nameFull.replace(/,?\s*\$?[\d.,]+\s*$/, '').trim() // remove price if present
+    : '';
+
+  // Price: normalize "25,60" → "25.60"
+  const price = priceRaw.replace(',', '.').replace(/[^\d.]/g, '');
+
+  // Tasting notes: first occurrence of each (page may have multiple vintages)
+  const eye    = doc.querySelector('.jrOeil .jrFieldValue')?.textContent?.trim() || '';
+  const nose   = doc.querySelector('.jrNez .jrFieldValue')?.textContent?.trim() || '';
+  const palate = doc.querySelector('.jrBouche .jrFieldValue')?.textContent?.trim() || '';
+  const comment= doc.querySelector('.jrCommentaires .jrFieldValue')?.textContent?.trim() || '';
+
+  // Rating
+  const ratingEl = doc.querySelector('.jrOverallEditor .jrRatingValue span');
+  const rating = ratingEl?.textContent?.trim() || '';
+
   const result = {};
+  if (name)        result.name = name;
   if (vintage)     result.vintage = vintage;
-  if (grape)       result.grape = grape;
+  if (price)       result.price = price;
   if (type)        result.type = type;
-  if (producer)    result.producer = producer;
+  if (saqCode)     result.saqCode = saqCode;
   if (country)     result.country = country;
   if (region)      result.region = region;
   if (appellation) result.appellation = appellation;
+  if (grape)       result.grape = grape;
+  if (producer)    result.producer = producer;
   if (alcohol)     result.alcohol = alcohol;
   if (format)      result.format = format;
-  if (description) result.description = description;
+  if (evolution)   result.evolution = evolution;
+  if (qp)          result.qualitePrix = qp;
+  if (eye)         result.tastingColor = eye;
+  if (nose)        result.tastingNose = nose;
+  if (palate)      result.tastingPalate = palate;
+  if (comment)     result.description = comment;
+  if (rating)      result.svRating = rating;
 
   return result;
 }

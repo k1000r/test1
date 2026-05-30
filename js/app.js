@@ -277,14 +277,62 @@ async function saveNote(e) {
 // ── Add / Edit Wine ───────────────────────────────────────────────────────────
 function openAddWine(prefill = {}) {
   App.editingWineId = null;
+  App.pendingTastingNote = null;
   const form = $('#wine-form');
   form.reset();
   $('#wine-form-title').textContent = 'Ajouter un vin';
-  if (prefill.name) form.querySelector('[name=name]').value = prefill.name;
-  if (prefill.vintage) form.querySelector('[name=vintage]').value = prefill.vintage;
-  if (prefill.region) form.querySelector('[name=region]').value = prefill.region;
-  if (prefill.grape) form.querySelector('[name=grape]').value = prefill.grape;
-  if (prefill.barcode) form.querySelector('[name=barcode]').value = prefill.barcode;
+
+  const set = (name, val) => { if (val) { const el = form.querySelector(`[name=${name}]`); if (el) el.value = val; } };
+  set('name',         prefill.name);
+  set('vintage',      prefill.vintage);
+  set('region',       prefill.region || prefill.country);
+  set('grape',        prefill.grape);
+  set('appellation',  prefill.appellation);
+  set('barcode',      prefill.barcode);
+  set('price',        prefill.price);
+  set('location',     prefill.format); // format → location not ideal but useful hint
+
+  // Map Sommelier Virtuel type to our select values
+  if (prefill.type) {
+    const t = prefill.type.toLowerCase();
+    const sel = form.querySelector('[name=type]');
+    if (sel) {
+      if (t.includes('rouge'))    sel.value = 'Rouge';
+      else if (t.includes('blanc')) sel.value = 'Blanc';
+      else if (t.includes('ros'))   sel.value = 'Rosé';
+      else if (t.includes('mouss') || t.includes('crémant') || t.includes('champagne')) sel.value = 'Mousseux / Champagne';
+      else if (t.includes('dessert') || t.includes('porto') || t.includes('liquor')) sel.value = 'Fortifié';
+    }
+  }
+
+  // Store tasting data for optional auto-note after save
+  if (prefill.tastingNose || prefill.tastingPalate || prefill.description) {
+    App.pendingTastingNote = {
+      color:  prefill.tastingColor  || '',
+      nose:   prefill.tastingNose   || '',
+      palate: prefill.tastingPalate || '',
+      text:   prefill.description   || '',
+      score:  prefill.svRating ? Math.round(parseFloat(prefill.svRating) * 10) : null,
+    };
+  }
+
+  // Show source banner if data came from Sommelier Virtuel
+  const banner = $('#sv-prefill-banner');
+  if (banner) {
+    if (prefill.source === 'Sommelier Virtuel') {
+      banner.style.display = 'block';
+      banner.innerHTML = `✅ Données importées depuis <strong>Sommelier Virtuel</strong>
+        ${prefill.qualitePrix ? ` · Rapport Q/P : <em>${escHtml(prefill.qualitePrix)}</em>` : ''}
+        ${prefill.evolution ? ` · ${escHtml(prefill.evolution)}` : ''}
+        ${prefill.saqCode ? ` · Code SAQ : ${escHtml(prefill.saqCode)}` : ''}`;
+    } else if (prefill.source) {
+      banner.style.display = 'block';
+      banner.innerHTML = `✅ Données importées depuis <strong>${escHtml(prefill.source)}</strong>`;
+    } else {
+      banner.style.display = 'none';
+    }
+  }
+
   showPage('add');
 }
 
@@ -326,10 +374,17 @@ async function saveWine(e) {
     await DB.updateWine(data);
     showToast('Vin modifié ✓');
   } else {
-    await DB.addWine(data);
-    showToast('Vin ajouté ✓');
+    const newId = await DB.addWine(data);
+    // Auto-create tasting note if Sommelier Virtuel provided tasting data
+    if (App.pendingTastingNote && (App.pendingTastingNote.nose || App.pendingTastingNote.palate || App.pendingTastingNote.text)) {
+      await DB.addNote({ wineId: newId, ...App.pendingTastingNote, date: new Date().toISOString().slice(0, 10) });
+      showToast('Vin ajouté + note de dégustation créée ✓');
+    } else {
+      showToast('Vin ajouté ✓');
+    }
   }
   App.editingWineId = null;
+  App.pendingTastingNote = null;
   showPage('cellar');
 }
 
