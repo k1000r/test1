@@ -67,60 +67,119 @@ const SV_BASE = 'https://www.sommeliervirtuel.com/chercher-un-vin/search-results
 const CORS_PROXY = 'https://corsproxy.io/?';
 
 async function lookupSommelierVirtuel(barcode) {
-  const url = CORS_PROXY + encodeURIComponent(`${SV_BASE}?keywords=${barcode}`);
-  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-  if (!res.ok) return null;
-  const html = await res.text();
-  return parseSommelierVirtuelHTML(html, barcode);
+  // Step 1 — search results page to get name, price, country/region/appellation, and detail URL
+  const searchUrl = CORS_PROXY + encodeURIComponent(`${SV_BASE}?keywords=${barcode}`);
+  const searchRes = await fetch(searchUrl, { signal: AbortSignal.timeout(10000) });
+  if (!searchRes.ok) return null;
+  const searchHtml = await searchRes.text();
+  const basic = parseSearchResults(searchHtml, barcode);
+  if (!basic) return null;
+
+  // Step 2 — fetch detail page for cépage, millésime, type, producteur, etc.
+  if (basic.detailUrl) {
+    try {
+      const detailUrl = CORS_PROXY + encodeURIComponent(basic.detailUrl);
+      const detailRes = await fetch(detailUrl, { signal: AbortSignal.timeout(10000) });
+      if (detailRes.ok) {
+        const detailHtml = await detailRes.text();
+        const extra = parseDetailPage(detailHtml);
+        // Merge: detail fields override/complement basic fields
+        return { ...basic, ...extra, barcode, source: 'Sommelier Virtuel' };
+      }
+    } catch (_) {}
+  }
+
+  return { ...basic, barcode, source: 'Sommelier Virtuel' };
 }
 
-function parseSommelierVirtuelHTML(html, barcode) {
+// ── Parse search results list page ───────────────────────────────────────────
+
+function parseSearchResults(html, barcode) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
-  // First result card — jreviews structure
-  const card = doc.querySelector('.jr-listing-outer, .jrResults .jrRow:not(.jrDataListHeader)');
+  // First result row (skip header row)
+  const card = doc.querySelector('.jr-listing-outer');
   if (!card) return null;
 
-  // Name + price from the title link: "Zonin Prosecco Cuvée 1821, $15.60"
+  // Name + price: "Zonin Prosecco Cuvée 1821, $15.60"
   const titleEl = card.querySelector('.jrListingTitle a');
   if (!titleEl) return null;
   const titleRaw = titleEl.textContent.trim();
 
-  // Split name and price: "Nom du vin 2020, $15.60" → name="Nom du vin 2020", price="15.60"
-  const priceMatch = titleRaw.match(/,\s*\$?([\d.,]+)\s*$/);
+  const priceMatch = titleRaw.match(/,\s*\$?([\d.]+)\s*$/);
   const price = priceMatch ? priceMatch[1] : '';
-  const nameWithVintage = priceMatch ? titleRaw.slice(0, priceMatch.index).trim() : titleRaw;
+  const nameFull = priceMatch ? titleRaw.slice(0, priceMatch.index).trim() : titleRaw;
 
-  // Extract vintage from name if present: "Zonin Prosecco Cuvée 1821" → vintage="1821" only if 4-digit year
-  const vintageMatch = nameWithVintage.match(/\b(19[5-9]\d|20[0-2]\d)\b/);
+  // Vintage: only match realistic wine years (1950–2029)
+  const vintageMatch = nameFull.match(/\b(19[5-9]\d|20[0-2]\d)\b/);
   const vintage = vintageMatch ? vintageMatch[0] : '';
-  // Remove vintage from name
   const name = vintageMatch
-    ? nameWithVintage.replace(vintageMatch[0], '').replace(/\s{2,}/g, ' ').trim().replace(/,\s*$/, '')
-    : nameWithVintage;
+    ? nameFull.replace(vintageMatch[0], '').replace(/\s{2,}/g, ' ').trim().replace(/,\s*$/, '')
+    : nameFull;
 
-  // Custom fields: .jrFieldRow contains .jrFieldLabel + .jrFieldValue
-  function getField(className) {
-    const row = card.querySelector(`.${className} .jrFieldValue, .jr${capitalize(className)} .jrFieldValue`);
-    return row?.textContent?.trim() || '';
-  }
-  function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  // Detail URL for step 2
+  const detailUrl = titleEl.href || card.querySelector('.jrListingActions a')?.href || '';
 
-  // Direct class selectors found in the HTML
+  // Fields available on search page (limited: only Origine, Région, Appellation)
   const country     = card.querySelector('.jrPaysdorigine .jrFieldValue')?.textContent?.trim() || '';
   const region      = card.querySelector('.jrRegion .jrFieldValue')?.textContent?.trim() || '';
   const appellation = card.querySelector('.jrAppellation .jrFieldValue')?.textContent?.trim() || '';
-  const grape       = card.querySelector('.jrCepage .jrFieldValue, .jrCepages .jrFieldValue')?.textContent?.trim() || '';
-  const type        = card.querySelector('.jrCategorie .jrFieldValue, .jrType .jrFieldValue')?.textContent?.trim() || '';
-  const producer    = card.querySelector('.jrProducteur .jrFieldValue, .jrProducer .jrFieldValue')?.textContent?.trim() || '';
-  const url         = titleEl.href || '';
 
-  // Rating
-  const ratingEl = card.querySelector('.jrRatingValue');
+  // Rating (editor score)
+  const ratingEl = card.querySelector('.jrOverallEditor .jrRatingValue span');
   const rating = ratingEl?.textContent?.trim() || '';
 
-  return { name, vintage, region, appellation, grape, country, price, type, producer, rating, url, barcode, source: 'Sommelier Virtuel' };
+  return { name, vintage, price, country, region, appellation, rating, detailUrl };
 }
+
+// ── Parse detail page — extracts ALL jreviews custom fields ──────────────────
+
+function parseDetailPage(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  // Generic extractor: read ALL .jrFieldRow label→value pairs
+  const fields = {};
+  doc.querySelectorAll('.jrFieldRow').forEach(row => {
+    const label = row.querySelector('.jrFieldLabel')?.textContent?.trim().toLowerCase() || '';
+    const value = row.querySelector('.jrFieldValue')?.textContent?.trim() || '';
+    if (label && value) fields[label] = value;
+  });
+
+  // Map French labels to our schema
+  const get = (...keys) => {
+    for (const k of keys) {
+      if (fields[k]) return fields[k];
+    }
+    return '';
+  };
+
+  const vintage     = get('millésime', 'millesime', 'année', 'annee', 'vintage');
+  const grape       = get('cépage', 'cepage', 'cépages', 'cepages', 'variété', 'variete');
+  const type        = get('type', 'couleur', 'catégorie', 'categorie', 'style');
+  const producer    = get('producteur', 'producer', 'domaine', 'château', 'chateau', 'maison', 'winery');
+  const country     = get('origine', 'pays', 'country');
+  const region      = get('région', 'region');
+  const appellation = get('appellation', 'désignation', 'designation');
+  const alcohol     = get('alcool', 'alcohol', 'degré', 'degre', 'abv');
+  const format      = get('format', 'volume', 'contenant', 'taille');
+  const description = doc.querySelector('.jrListingDescription, .jrDescription, .entry-content p')?.textContent?.trim() || '';
+
+  // Clean up result — only return non-empty fields
+  const result = {};
+  if (vintage)     result.vintage = vintage;
+  if (grape)       result.grape = grape;
+  if (type)        result.type = type;
+  if (producer)    result.producer = producer;
+  if (country)     result.country = country;
+  if (region)      result.region = region;
+  if (appellation) result.appellation = appellation;
+  if (alcohol)     result.alcohol = alcohol;
+  if (format)      result.format = format;
+  if (description) result.description = description;
+
+  return result;
+}
+
 
 // ── Lookup cascade: Sommelier Virtuel → SAQ DB → Open Food Facts → UPC Item DB ─
 
