@@ -77,61 +77,49 @@ async function lookupSommelierVirtuel(barcode) {
 function parseSommelierVirtuelHTML(html, barcode) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
-  // Try to find the first wine result — try common selectors
-  const cardSelectors = [
-    '.product', '.wine-card', '.search-result', '.entry',
-    'article', '.post', '.item', '.woocommerce-product',
-    '[class*="product"]', '[class*="wine"]', '[class*="result"]'
-  ];
-  let card = null;
-  for (const sel of cardSelectors) {
-    const els = doc.querySelectorAll(sel);
-    if (els.length > 0) { card = els[0]; break; }
+  // First result card — jreviews structure
+  const card = doc.querySelector('.jr-listing-outer, .jrResults .jrRow:not(.jrDataListHeader)');
+  if (!card) return null;
+
+  // Name + price from the title link: "Zonin Prosecco Cuvée 1821, $15.60"
+  const titleEl = card.querySelector('.jrListingTitle a');
+  if (!titleEl) return null;
+  const titleRaw = titleEl.textContent.trim();
+
+  // Split name and price: "Nom du vin 2020, $15.60" → name="Nom du vin 2020", price="15.60"
+  const priceMatch = titleRaw.match(/,\s*\$?([\d.,]+)\s*$/);
+  const price = priceMatch ? priceMatch[1] : '';
+  const nameWithVintage = priceMatch ? titleRaw.slice(0, priceMatch.index).trim() : titleRaw;
+
+  // Extract vintage from name if present: "Zonin Prosecco Cuvée 1821" → vintage="1821" only if 4-digit year
+  const vintageMatch = nameWithVintage.match(/\b(19[5-9]\d|20[0-2]\d)\b/);
+  const vintage = vintageMatch ? vintageMatch[0] : '';
+  // Remove vintage from name
+  const name = vintageMatch
+    ? nameWithVintage.replace(vintageMatch[0], '').replace(/\s{2,}/g, ' ').trim().replace(/,\s*$/, '')
+    : nameWithVintage;
+
+  // Custom fields: .jrFieldRow contains .jrFieldLabel + .jrFieldValue
+  function getField(className) {
+    const row = card.querySelector(`.${className} .jrFieldValue, .jr${capitalize(className)} .jrFieldValue`);
+    return row?.textContent?.trim() || '';
   }
-  if (!card) card = doc.body; // fallback: search whole page
+  function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
-  // Extract name
-  const nameSelectors = [
-    'h1','h2','h3','.product-title','.wine-name','.entry-title',
-    '[class*="title"]','[class*="name"]'
-  ];
-  let name = '';
-  for (const sel of nameSelectors) {
-    const el = card.querySelector(sel);
-    if (el?.textContent?.trim()) { name = el.textContent.trim(); break; }
-  }
+  // Direct class selectors found in the HTML
+  const country     = card.querySelector('.jrPaysdorigine .jrFieldValue')?.textContent?.trim() || '';
+  const region      = card.querySelector('.jrRegion .jrFieldValue')?.textContent?.trim() || '';
+  const appellation = card.querySelector('.jrAppellation .jrFieldValue')?.textContent?.trim() || '';
+  const grape       = card.querySelector('.jrCepage .jrFieldValue, .jrCepages .jrFieldValue')?.textContent?.trim() || '';
+  const type        = card.querySelector('.jrCategorie .jrFieldValue, .jrType .jrFieldValue')?.textContent?.trim() || '';
+  const producer    = card.querySelector('.jrProducteur .jrFieldValue, .jrProducer .jrFieldValue')?.textContent?.trim() || '';
+  const url         = titleEl.href || '';
 
-  // Extract structured fields from definition lists, tables or labelled spans
-  function extractField(labels) {
-    for (const label of labels) {
-      // dt/dd pattern
-      const dts = card.querySelectorAll('dt, th, label, strong, b, [class*="label"]');
-      for (const dt of dts) {
-        if (dt.textContent.toLowerCase().includes(label)) {
-          const sibling = dt.nextElementSibling || dt.parentElement?.nextElementSibling;
-          if (sibling?.textContent?.trim()) return sibling.textContent.trim();
-        }
-      }
-      // Look for text patterns like "Région : Bordeaux"
-      const bodyText = card.textContent;
-      const rx = new RegExp(`${label}[\\s:]+([^\\n,;]{2,50})`, 'i');
-      const m = bodyText.match(rx);
-      if (m) return m[1].trim();
-    }
-    return '';
-  }
+  // Rating
+  const ratingEl = card.querySelector('.jrRatingValue');
+  const rating = ratingEl?.textContent?.trim() || '';
 
-  const vintage  = extractField(['millésime','millesime','vintage','année','annee']) || extractVintage(name);
-  const region   = extractField(['région','region','appellation','provenance']);
-  const grape    = extractField(['cépage','cepage','variété','variete','grape','raisin']);
-  const producer = extractField(['producteur','producer','domaine','château','chateau','winery']);
-  const country  = extractField(['pays','country','origine','origin']);
-  const price    = extractField(['prix','price','tarif']);
-  const type     = extractField(['type','couleur','color','style']);
-
-  if (!name) return null;
-
-  return { name, vintage, region, grape, producer, country, price, type, barcode, source: 'Sommelier Virtuel' };
+  return { name, vintage, region, appellation, grape, country, price, type, producer, rating, url, barcode, source: 'Sommelier Virtuel' };
 }
 
 // ── Lookup cascade: Sommelier Virtuel → SAQ DB → Open Food Facts → UPC Item DB ─
