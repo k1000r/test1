@@ -61,10 +61,89 @@ function stopScanner() {
   }
 }
 
-// ── Lookup cascade: SAQ DB → Open Food Facts → UPC Item DB → fallback ─────────
+// ── Sommelier Virtuel lookup (via CORS proxy) ─────────────────────────────────
+
+const SV_BASE = 'https://www.sommeliervirtuel.com/chercher-un-vin/search-results/';
+const CORS_PROXY = 'https://corsproxy.io/?';
+
+async function lookupSommelierVirtuel(barcode) {
+  const url = CORS_PROXY + encodeURIComponent(`${SV_BASE}?keywords=${barcode}`);
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) return null;
+  const html = await res.text();
+  return parseSommelierVirtuelHTML(html, barcode);
+}
+
+function parseSommelierVirtuelHTML(html, barcode) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  // Try to find the first wine result — try common selectors
+  const cardSelectors = [
+    '.product', '.wine-card', '.search-result', '.entry',
+    'article', '.post', '.item', '.woocommerce-product',
+    '[class*="product"]', '[class*="wine"]', '[class*="result"]'
+  ];
+  let card = null;
+  for (const sel of cardSelectors) {
+    const els = doc.querySelectorAll(sel);
+    if (els.length > 0) { card = els[0]; break; }
+  }
+  if (!card) card = doc.body; // fallback: search whole page
+
+  // Extract name
+  const nameSelectors = [
+    'h1','h2','h3','.product-title','.wine-name','.entry-title',
+    '[class*="title"]','[class*="name"]'
+  ];
+  let name = '';
+  for (const sel of nameSelectors) {
+    const el = card.querySelector(sel);
+    if (el?.textContent?.trim()) { name = el.textContent.trim(); break; }
+  }
+
+  // Extract structured fields from definition lists, tables or labelled spans
+  function extractField(labels) {
+    for (const label of labels) {
+      // dt/dd pattern
+      const dts = card.querySelectorAll('dt, th, label, strong, b, [class*="label"]');
+      for (const dt of dts) {
+        if (dt.textContent.toLowerCase().includes(label)) {
+          const sibling = dt.nextElementSibling || dt.parentElement?.nextElementSibling;
+          if (sibling?.textContent?.trim()) return sibling.textContent.trim();
+        }
+      }
+      // Look for text patterns like "Région : Bordeaux"
+      const bodyText = card.textContent;
+      const rx = new RegExp(`${label}[\\s:]+([^\\n,;]{2,50})`, 'i');
+      const m = bodyText.match(rx);
+      if (m) return m[1].trim();
+    }
+    return '';
+  }
+
+  const vintage  = extractField(['millésime','millesime','vintage','année','annee']) || extractVintage(name);
+  const region   = extractField(['région','region','appellation','provenance']);
+  const grape    = extractField(['cépage','cepage','variété','variete','grape','raisin']);
+  const producer = extractField(['producteur','producer','domaine','château','chateau','winery']);
+  const country  = extractField(['pays','country','origine','origin']);
+  const price    = extractField(['prix','price','tarif']);
+  const type     = extractField(['type','couleur','color','style']);
+
+  if (!name) return null;
+
+  return { name, vintage, region, grape, producer, country, price, type, barcode, source: 'Sommelier Virtuel' };
+}
+
+// ── Lookup cascade: Sommelier Virtuel → SAQ DB → Open Food Facts → UPC Item DB ─
 
 async function lookupBarcode(barcode) {
-  // 1. Try local SAQ database first (best coverage for Quebec wines)
+  // 1. Sommelier Virtuel (spécialisé vins, bonne couverture Québec/SAQ)
+  try {
+    const result = await lookupSommelierVirtuel(barcode);
+    if (result && result.name) return result;
+  } catch (_) {}
+
+  // 2. Base SAQ locale
   try {
     const count = await SAQDB.getSAQProductCount();
     if (count > 0) {
@@ -85,13 +164,13 @@ async function lookupBarcode(barcode) {
     }
   } catch (_) {}
 
-  // 2. Try Open Food Facts
+  // 4. Open Food Facts
   try {
     const result = await lookupOpenFoodFacts(barcode);
     if (result) return result;
   } catch (_) {}
 
-  // 3. Try UPC Item DB (free tier, good coverage for North American products)
+  // 5. UPC Item DB
   try {
     const result = await lookupUPCItemDB(barcode);
     if (result) return result;
